@@ -1,0 +1,8 @@
+database:
+  password: "REPLACE_WITH_DATABASE_PASSWORD"
+
+security:
+  secretKey: "REPLACE_WITH_RANDOM_SECRET"
+  encryptionKey: "REPLACE_WITH_FERNET_KEY"
+  adminPassword: "REPLACE_WITH_ADMIN_PASSWORD"
+

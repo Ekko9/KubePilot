@@ -1,0 +1,80 @@
+replicaCount: 1
+fullnameOverride: devops-platform
+
+image:
+  repository: kubepilot-devops
+  tag: "v1.0.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: devops-platform
+
+service:
+  type: NodePort
+  port: 8080
+  nodePort: 30088
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: devops.example.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+database:
+  host: db.example.internal
+  port: 3306
+  user: root
+  password: ""
+  name: kubepilot_devops
+
+security:
+  secretKey: ""
+  encryptionKey: ""
+  adminUsername: admin
+  adminPassword: ""
+  adminEmail: admin@example.com
+
+app:
+  pollIntervalSeconds: 30
+  corsOrigins: "*"
+  displayTimezone: Asia/Shanghai
+
+diskMonitor:
+  enabled: true
+  paths:
+    - /
+  pollIntervalSeconds: 30
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+kaniko:
+  image: gcr.io/kaniko-project/executor:v1.24.0-debug
+  gitCloneImage: alpine/git:2.49.1
+  registryInsecure: true
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+

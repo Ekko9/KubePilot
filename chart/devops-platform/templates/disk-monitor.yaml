@@ -1,0 +1,70 @@
+{{- if .Values.diskMonitor.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "devops-platform.fullname" . }}-monitor
+  labels:
+    {{- include "devops-platform.labels" . | nindent 4 }}
+data:
+  {{- $existing := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-monitor" (include "devops-platform.fullname" .)) }}
+  {{- if and $existing $existing.data (hasKey $existing.data "paths") }}
+  paths: {{ index $existing.data "paths" | quote }}
+  {{- else }}
+  paths: |-
+    {{- range .Values.diskMonitor.paths }}
+    {{ . }}
+    {{- end }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "devops-platform.fullname" . }}-monitor
+  labels:
+    {{- include "devops-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: monitor
+spec:
+  selector:
+    matchLabels:
+      {{- include "devops-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: monitor
+  template:
+    metadata:
+      labels:
+        {{- include "devops-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: monitor
+    spec:
+      serviceAccountName: {{ include "devops-platform.serviceAccountName" . }}
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: monitor
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "app.disk_agent"]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: DISK_CONFIG_MAP
+              value: {{ printf "%s-monitor" (include "devops-platform.fullname" .) | quote }}
+            - name: DISK_POLL_INTERVAL_SECONDS
+              value: {{ .Values.diskMonitor.pollIntervalSeconds | quote }}
+          volumeMounts:
+            - name: host-root
+              mountPath: /host
+              readOnly: true
+              mountPropagation: HostToContainer
+          resources:
+            {{- toYaml .Values.diskMonitor.resources | nindent 12 }}
+      volumes:
+        - name: host-root
+          hostPath:
+            path: /
+            type: Directory
+{{- end }}

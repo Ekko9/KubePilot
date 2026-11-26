@@ -1,0 +1,10 @@
+KubePilot DevOps 已安装。
+
+NodePort 访问地址：
+  http://<任一节点IP>:{{ .Values.service.nodePort }}
+
+用户名：{{ .Values.security.adminUsername }}
+密码保存在安装时使用的 values-private.yaml 中。镜像构建请配置外部私有仓库地址和 registry secret。
+
+节点脚本会直接采集宿主机 CPU、内存和磁盘，无需安装 metrics-server。
+

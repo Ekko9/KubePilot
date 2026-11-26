@@ -1,0 +1,123 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "devops-platform.fullname" . }}
+  labels:
+    {{- include "devops-platform.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "devops-platform.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "devops-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: platform
+    spec:
+      serviceAccountName: {{ include "devops-platform.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: devops-platform
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: DEVOPS_DB_HOST
+              value: {{ .Values.database.host | quote }}
+            - name: DEVOPS_DB_PORT
+              value: {{ .Values.database.port | quote }}
+            - name: DEVOPS_DB_USER
+              value: {{ .Values.database.user | quote }}
+            - name: DEVOPS_DB_NAME
+              value: {{ .Values.database.name | quote }}
+            - name: DEVOPS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "devops-platform.fullname" . }}
+                  key: db-password
+            - name: DEVOPS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "devops-platform.fullname" . }}
+                  key: secret-key
+            - name: DEVOPS_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "devops-platform.fullname" . }}
+                  key: encryption-key
+            - name: DEVOPS_ADMIN_USERNAME
+              value: {{ .Values.security.adminUsername | quote }}
+            - name: DEVOPS_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "devops-platform.fullname" . }}
+                  key: admin-password
+            - name: DEVOPS_ADMIN_EMAIL
+              value: {{ .Values.security.adminEmail | quote }}
+            - name: DEVOPS_REGISTRY_INSECURE
+              value: {{ .Values.kaniko.registryInsecure | quote }}
+            - name: DEVOPS_KANIKO_IMAGE
+              value: {{ .Values.kaniko.image | quote }}
+            - name: DEVOPS_GIT_CLONE_IMAGE
+              value: {{ .Values.kaniko.gitCloneImage | quote }}
+            - name: DEVOPS_BUILD_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: DEVOPS_SERVICE_ACCOUNT_NAME
+              value: {{ include "devops-platform.serviceAccountName" . | quote }}
+            - name: DEVOPS_POLL_INTERVAL_SECONDS
+              value: {{ .Values.app.pollIntervalSeconds | quote }}
+            - name: DEVOPS_DISPLAY_TIMEZONE
+              value: {{ .Values.app.displayTimezone | quote }}
+            - name: TZ
+              value: {{ .Values.app.displayTimezone | quote }}
+            - name: DEVOPS_DISK_CONFIG_MAP
+              value: {{ printf "%s-monitor" (include "devops-platform.fullname" .) | quote }}
+            - name: DEVOPS_CORS_ORIGINS
+              value: {{ .Values.app.corsOrigins | quote }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+

@@ -1,0 +1,11 @@
+.env
+values-private.yaml
+*.tar
+*.tar.gz
+__pycache__/
+.pytest_cache/
+.ui-test/
+artifacts/
+dist/
+test-results/
+

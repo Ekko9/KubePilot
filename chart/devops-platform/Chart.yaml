@@ -1,0 +1,7 @@
+apiVersion: v2
+name: devops-platform
+description: KubePilot Kubernetes automation, image build, monitoring and alerting platform
+type: application
+version: 1.0.0
+appVersion: "v1.0.0"
+
