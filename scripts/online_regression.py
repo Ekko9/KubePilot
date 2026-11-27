@@ -313,6 +313,15 @@ def main() -> int:
             cleanup("DELETE", f"/api/users/{user_id}")
 
     def build_config_flow():
+        build_steps = [{
+            "name": "frontend", "image": "registry.example.com/build/node:20-alpine",
+            "working_dir": "frontend", "command": "npm ci && npm run build",
+            "env": {"NPM_CONFIG_REGISTRY": "http://npm.example.internal/repository/npm-group/"},
+        }, {
+            "name": "backend", "image": "registry.example.com/build/gradle:8-jdk17",
+            "working_dir": ".", "command": "./gradlew :backend:bootJar --no-daemon",
+            "env": {},
+        }]
         config = request("POST", "/api/build-configs", {
             "name": f"regression-build-{SUFFIX}", "description": "online regression",
             "enabled": False, "git_url": "https://example.invalid/repository.git",
@@ -321,9 +330,11 @@ def main() -> int:
             "namespace": TEST_NAMESPACE, "git_secret_name": "", "registry_secret_name": "",
             "git_username": "", "git_password": "", "registry_username": "", "registry_password": "",
             "clear_git_credentials": False, "clear_registry_credentials": False,
+            "build_steps": build_steps,
             "build_args": {"REGRESSION": "true"}, "timeout_seconds": 60,
             "allow_concurrent": False, "retention_count": 2,
         })
+        assert config["build_steps"] == build_steps
         CREATED["build_configs"].append(config["id"])
         payload = {
             "name": config["name"], "description": "online regression updated", "enabled": False,
@@ -332,13 +343,17 @@ def main() -> int:
             "namespace": TEST_NAMESPACE, "git_secret_name": "", "registry_secret_name": "",
             "git_username": "", "git_password": "", "registry_username": "", "registry_password": "",
             "clear_git_credentials": False, "clear_registry_credentials": False,
+            "build_steps": build_steps[:1],
             "build_args": {"REGRESSION": "updated"}, "timeout_seconds": 60,
             "allow_concurrent": False, "retention_count": 2,
         }
         updated = request("PUT", f"/api/build-configs/{config['id']}", payload)
         assert updated["description"].endswith("updated")
+        assert updated["build_steps"] == build_steps[:1]
+        listed = next(item for item in request("GET", "/api/build-configs") if item["id"] == config["id"])
+        assert listed["build_steps"] == build_steps[:1]
         cleanup("DELETE", f"/api/build-configs/{config['id']}")
-        return {"id": config["id"], "listed": len(request("GET", "/api/build-configs"))}
+        return {"id": config["id"], "steps": len(updated["build_steps"])}
 
     check("build configuration create, edit, list and delete", build_config_flow)
     def build_history_flow():

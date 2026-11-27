@@ -49,6 +49,8 @@ app:
 
 diskMonitor:
   enabled: true
+  updateStrategy:
+    maxUnavailable: 25%
   paths:
     - /
   pollIntervalSeconds: 30

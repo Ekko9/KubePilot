@@ -55,9 +55,11 @@ def ensure_schema_upgrades() -> None:
         "image_builds": {
             "config_id": "ALTER TABLE image_builds ADD COLUMN config_id INTEGER NULL",
             "build_args": "ALTER TABLE image_builds ADD COLUMN build_args JSON NULL",
+            "build_steps": "ALTER TABLE image_builds ADD COLUMN build_steps JSON NULL",
         },
         "build_configurations": {
             "git_auth_secret_name": "ALTER TABLE build_configurations ADD COLUMN git_auth_secret_name VARCHAR(180) NOT NULL DEFAULT ''",
+            "build_steps": "ALTER TABLE build_configurations ADD COLUMN build_steps JSON NULL",
         },
         "alert_rules": {
             "template_id": "ALTER TABLE alert_rules ADD COLUMN template_id INTEGER NULL",

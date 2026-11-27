@@ -558,6 +558,25 @@ def test_build_credentials_require_complete_pairs_and_http_or_https_git_url():
         BuildConfigurationCreate(**{**base, "git_url": "git@example.com:team/project.git"}, git_username="builder", git_password="token")
 
 
+def test_build_steps_validate_repository_paths_and_limits():
+    base = {
+        "name": "web-release",
+        "git_url": "https://git.example.com/team/project.git",
+        "destination": "registry.example.com/team/project:1",
+    }
+    config = BuildConfigurationCreate(**base, build_steps=[{
+        "name": "frontend", "image": "registry.example.com/build/node:20",
+        "working_dir": "frontend", "command": "npm ci && npm run build",
+        "env": {"NPM_CONFIG_REGISTRY": "http://npm.example.internal/"},
+    }])
+    assert config.build_steps[0].working_dir == "frontend"
+    with pytest.raises(ValidationError, match="代码仓库内"):
+        BuildConfigurationCreate(**base, build_steps=[{
+            "name": "escape", "image": "node:20", "working_dir": "../outside",
+            "command": "npm run build",
+        }])
+
+
 def test_build_config_response_does_not_return_credentials_or_secret_names():
     config = BuildConfiguration(
         id=1, name="web-release", git_url="https://git.example.com/team/project.git",
@@ -592,10 +611,43 @@ def test_build_secret_stores_encoded_values_in_kubernetes():
     assert secret.type == "Opaque"
 
 
+def test_build_secret_recreates_legacy_secret_when_type_changes():
+    service = KubernetesService()
+    service._loaded = True
+    service.core = Mock()
+    service.core.read_namespaced_secret.return_value = SimpleNamespace(
+        metadata=SimpleNamespace(
+            labels={"kubepilot.io/build-credential": "true"},
+            resource_version="12",
+        ),
+        type="Opaque",
+    )
+
+    service.set_build_secret(
+        "devops-platform", "build-config-7-registry",
+        {"config.json": "{}", ".dockerconfigjson": "{}"},
+        secret_type="kubernetes.io/dockerconfigjson",
+    )
+
+    service.core.delete_namespaced_secret.assert_called_once_with(
+        "build-config-7-registry", "devops-platform",
+    )
+    created = service.core.create_namespaced_secret.call_args.args[1]
+    assert created.type == "kubernetes.io/dockerconfigjson"
+    service.core.replace_namespaced_secret.assert_not_called()
+
+
 def test_harbor_credentials_create_kaniko_docker_config():
     service = KubernetesService()
     secrets = {}
-    service.set_build_secret = lambda namespace, name, values: secrets.update(values) or name
+    secret_types = []
+
+    def capture_secret(namespace, name, values, secret_type="Opaque"):
+        secrets.update(values)
+        secret_types.append(secret_type)
+        return name
+
+    service.set_build_secret = capture_secret
 
     git_secret, registry_secret = service.configure_build_credentials(
         "devops-platform", 12, registry_server="harbor.example.com",
@@ -609,6 +661,8 @@ def test_harbor_credentials_create_kaniko_docker_config():
     assert git_secret is None
     assert registry_secret == "build-config-12-registry"
     assert config["auths"]["harbor.example.com"]["auth"] == base64.b64encode(b"robot:token").decode()
+    assert secrets[".dockerconfigjson"] == secrets["config.json"]
+    assert secret_types == ["kubernetes.io/dockerconfigjson"]
 
 
 def test_build_job_uses_secret_refs_without_embedding_git_password(monkeypatch):
@@ -621,6 +675,13 @@ def test_build_job_uses_secret_refs_without_embedding_git_password(monkeypatch):
         name="web-release", git_url="https://git.example.com/team/repo.git",
         git_ref="main", destination="harbor.example.com/team/repo:1",
         git_auth_secret_name="build-config-5-git", registry_secret_name="build-config-5-registry",
+        build_steps=[{
+            "name": "frontend", "image": "node:20-alpine", "working_dir": "frontend",
+            "command": "npm ci && npm run build", "env": {"CI": "true"},
+        }, {
+            "name": "backend", "image": "gradle:8-jdk17", "working_dir": ".",
+            "command": "./gradlew :backend:bootJar", "env": {},
+        }],
     )
 
     service.create_build_job(request, 5)
@@ -634,6 +695,48 @@ def test_build_job_uses_secret_refs_without_embedding_git_password(monkeypatch):
     assert {item.name for item in clone.env} == {"GIT_USERNAME", "GIT_PASSWORD"}
     assert clone.env[1].value_from.secret_key_ref.name == "build-config-5-git"
     assert any(volume.name == "registry-auth" for volume in spec.volumes)
+    assert [container.name for container in spec.init_containers] == [
+        "git-clone", "compile-1-frontend", "compile-2-backend",
+    ]
+    frontend = spec.init_containers[1]
+    assert frontend.working_dir == "/workspace/src/frontend"
+    assert frontend.command == ["/bin/sh", "-ec", "npm ci && npm run build"]
+    assert frontend.env[0].name == "CI" and frontend.env[0].value == "true"
+    assert spec.init_containers[2].working_dir == "/workspace/src"
+    assert spec.image_pull_secrets[0].name == "build-config-5-registry"
+
+
+def test_build_status_aggregates_clone_compile_and_kaniko_logs():
+    service = KubernetesService()
+    service._loaded = True
+    service.batch = Mock()
+    service.core = Mock()
+    service.batch.read_namespaced_job.return_value = SimpleNamespace(
+        status=SimpleNamespace(succeeded=None, failed=1, active=None),
+    )
+    pod = SimpleNamespace(
+        metadata=SimpleNamespace(name="build-web-1-pod"),
+        spec=SimpleNamespace(init_containers=[
+            SimpleNamespace(name="git-clone"),
+            SimpleNamespace(name="compile-1-frontend"),
+            SimpleNamespace(name="compile-2-backend"),
+        ]),
+    )
+    service.core.list_namespaced_pod.return_value = SimpleNamespace(items=[pod])
+    logs = {
+        "git-clone": "cloned",
+        "compile-1-frontend": "frontend built",
+        "compile-2-backend": "backend built",
+        "kaniko": "image pushed",
+    }
+    service.core.read_namespaced_pod_log.side_effect = lambda *args, **kwargs: logs[kwargs["container"]]
+
+    result = service.build_status("devops-platform", "build-web-1")
+
+    assert result["status"] == "failed"
+    assert result["logs"].index("git-clone") < result["logs"].index("compile-1-frontend")
+    assert result["logs"].index("compile-1-frontend") < result["logs"].index("compile-2-backend")
+    assert result["logs"].index("compile-2-backend") < result["logs"].index("kaniko")
 
 
 def test_build_history_delete_always_removes_kubernetes_job(monkeypatch):

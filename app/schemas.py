@@ -88,6 +88,23 @@ class ScaleRequest(BaseModel):
     replicas: int = Field(ge=0, le=500)
 
 
+class BuildStep(BaseModel):
+    name: str = Field(min_length=1, max_length=50, pattern=r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+    image: str = Field(min_length=1, max_length=600)
+    working_dir: str = Field(default=".", max_length=300)
+    command: str = Field(min_length=1, max_length=12000)
+    env: dict[str, str] = Field(default_factory=dict, max_length=50)
+
+    @field_validator("working_dir")
+    @classmethod
+    def validate_working_dir(cls, value: str) -> str:
+        normalized = value.strip().replace("\\", "/") or "."
+        parts = [part for part in normalized.split("/") if part not in {"", "."}]
+        if normalized.startswith("/") or ".." in parts:
+            raise ValueError("编译步骤工作目录必须位于代码仓库内")
+        return "/".join(parts) if parts else "."
+
+
 class BuildRequest(BaseModel):
     name: str = Field(pattern=r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
     git_url: str
@@ -100,6 +117,7 @@ class BuildRequest(BaseModel):
     git_auth_secret_name: str = ""
     registry_secret_name: str = ""
     build_args: dict[str, str] = Field(default_factory=dict)
+    build_steps: list[BuildStep] = Field(default_factory=list, max_length=10)
     timeout_seconds: int = Field(default=1800, ge=60, le=86400)
 
 
@@ -122,6 +140,7 @@ class BuildConfigurationCreate(BaseModel):
     clear_git_credentials: bool = False
     clear_registry_credentials: bool = False
     build_args: dict[str, str] = Field(default_factory=dict)
+    build_steps: list[BuildStep] = Field(default_factory=list, max_length=10)
     timeout_seconds: int = Field(default=1800, ge=60, le=86400)
     allow_concurrent: bool = False
     retention_count: int = Field(default=20, ge=1, le=500)
@@ -147,6 +166,7 @@ class BuildRunRequest(BaseModel):
     git_ref: str | None = Field(default=None, max_length=180)
     destination: str | None = Field(default=None, max_length=600)
     build_args: dict[str, str] | None = None
+    build_steps: list[BuildStep] | None = Field(default=None, max_length=10)
 
 
 class AlertRuleCreate(BaseModel):

@@ -24,17 +24,29 @@ metadata:
     {{- include "devops-platform.labels" . | nindent 4 }}
     app.kubernetes.io/component: monitor
 spec:
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.diskMonitor.updateStrategy.maxUnavailable | quote }}
   selector:
     matchLabels:
       {{- include "devops-platform.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: monitor
   template:
     metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       labels:
         {{- include "devops-platform.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: monitor
     spec:
       serviceAccountName: {{ include "devops-platform.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       tolerations:
         - operator: Exists
       containers:

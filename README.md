@@ -237,6 +237,7 @@ ingress:
 | `app.pollIntervalSeconds` | `30` | 监控/告警轮询间隔 |
 | `app.corsOrigins` | `*` | CORS 来源，生产应收敛 |
 | `diskMonitor.enabled` | `true` | 节点监控 DaemonSet 开关 |
+| `diskMonitor.updateStrategy.maxUnavailable` | `25%` | 节点监控滚动升级时允许同时不可用的最大比例 |
 | `diskMonitor.paths` | `/` | 节点磁盘采集路径 |
 | `kaniko.image` | Kaniko v1.24 | 镜像构建器 |
 | `kaniko.registryInsecure` | `true` | 是否允许不安全 Registry；生产建议关闭 |
@@ -244,7 +245,7 @@ ingress:
 
 ## 10. 镜像构建配置
 
-每次执行创建独立 Kubernetes Job：init container 拉取代码，Kaniko 根据 Dockerfile 构建、缓存并推送镜像，平台实时采集状态和日志。
+每次执行创建独立 Kubernetes Job：Git init container 拉取代码，可选的编译 init containers 按顺序完成前后端编译，Kaniko 再根据 Dockerfile 构建、缓存并推送镜像，平台实时采集各阶段状态和日志。
 
 - Git 支持 HTTP/HTTPS 账号密码，也支持 SSH Secret。
 - Harbor 账号密码用于推送构建产物；平台 Pod 拉取自身镜像使用 `imagePullSecrets`，两者不同。
@@ -253,6 +254,7 @@ ingress:
 - 若文件是 `repo/devops/Dockerfile`，常规配置为构建目录 `devops`、Dockerfile `Dockerfile`。
 - 若构建上下文为仓库根目录，则配置 `.` 和 `devops/Dockerfile`。
 - 构建参数对应 Dockerfile `ARG`，不是运行时环境变量。
+- 编译步骤使用 JSON 数组配置，每步包含 `name`、`image`、`working_dir`、`command`，并可通过 `env` 设置内网 npm、Gradle 或 Maven 参数。构建配置中的 Harbor 凭据也用于拉取同一 Registry 下的私有编译镜像。
 - 目标镜像需包含仓库、项目、名称和 Tag。
 
 每次构建会新建 Pod；合理的 Dockerfile 分层和 Kaniko 远端缓存可避免完整重复下载依赖。超过保留数量或手工删除历史时，会同步清理关联 Job/Pod。

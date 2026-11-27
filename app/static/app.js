@@ -1179,7 +1179,7 @@
       var status = x.enabled ? '<span class="build-status is-enabled"><i></i>启用中</span>' : '<span class="build-status is-disabled"><i></i>已停用</span>';
       var toggleLabel = x.enabled ? '停用' : '启用';
       var toggleClass = x.enabled ? 'action-warn' : 'action-success';
-      return '<div class="artifact-card build-config-card"><div class="build-config-main"><div class="build-config-heading"><div><strong>' + esc(x.name) + '</strong><small>' + esc(x.description || x.git_url) + '</small></div><div class="build-config-status">' + status + '</div></div><div class="config-meta"><span>Git：' + esc(x.git_ref) + '</span><span>镜像：' + esc(x.destination) + '</span><span>凭证：Git ' + (x.has_git_credentials ? '已配置' : '未配置') + ' · Harbor ' + (x.has_registry_credentials ? '已配置' : '未配置') + '</span><span>超时：' + x.timeout_seconds + ' 秒</span><span>保留：' + x.retention_count + ' 条</span></div></div><div class="build-config-actions"><button class="action-success" onclick="kpRunBuildConfig(' + x.id + ')">运行</button><button class="action-edit" onclick="kpEditBuildConfig(' + x.id + ')">编辑</button><button class="' + toggleClass + '" onclick="kpToggleBuildConfig(' + x.id + ')">' + toggleLabel + '</button><button class="action-danger" onclick="kpDeleteBuildConfig(' + x.id + ')">删除</button></div></div>';
+      return '<div class="artifact-card build-config-card"><div class="build-config-main"><div class="build-config-heading"><div><strong>' + esc(x.name) + '</strong><small>' + esc(x.description || x.git_url) + '</small></div><div class="build-config-status">' + status + '</div></div><div class="config-meta"><span>Git：' + esc(x.git_ref) + '</span><span>镜像：' + esc(x.destination) + '</span><span>编译步骤：' + (x.build_steps || []).length + '</span><span>凭证：Git ' + (x.has_git_credentials ? '已配置' : '未配置') + ' · Harbor ' + (x.has_registry_credentials ? '已配置' : '未配置') + '</span><span>超时：' + x.timeout_seconds + ' 秒</span><span>保留：' + x.retention_count + ' 条</span></div></div><div class="build-config-actions"><button class="action-success" onclick="kpRunBuildConfig(' + x.id + ')">运行</button><button class="action-edit" onclick="kpEditBuildConfig(' + x.id + ')">编辑</button><button class="' + toggleClass + '" onclick="kpToggleBuildConfig(' + x.id + ')">' + toggleLabel + '</button><button class="action-danger" onclick="kpDeleteBuildConfig(' + x.id + ')">删除</button></div></div>';
     }).join('') : '<p class="muted">暂无构建配置，请先新建一个可复用配置。</p>';
   }
   function renderBuilds() {
@@ -1246,6 +1246,7 @@
         git_url: item.git_url, git_ref: item.git_ref, context_dir: item.context_dir,
         dockerfile: item.dockerfile, destination: item.destination, namespace: item.namespace,
         git_secret_name: '', registry_secret_name: '', build_args: item.build_args || {},
+        build_steps: item.build_steps || [],
         timeout_seconds: item.timeout_seconds, allow_concurrent: item.allow_concurrent,
         retention_count: item.retention_count,
       }) });
@@ -1351,6 +1352,7 @@
     form.elements.dockerfile.value = item ? item.dockerfile : 'Dockerfile';
     form.elements.timeout_seconds.value = item ? item.timeout_seconds : 1800;
     form.elements.retention_count.value = item ? item.retention_count : 20;
+    form.elements.build_steps.value = JSON.stringify(item ? (item.build_steps || []) : [], null, 2);
     form.elements.build_args.value = JSON.stringify(item ? (item.build_args || {}) : {}, null, 2);
     form.elements.git_username.value = '';
     form.elements.git_password.value = '';
@@ -1375,6 +1377,7 @@
     var form = document.getElementById('build-run-form');
     form.reset();
     form.elements.config_id.value = id;
+    form.elements.build_steps.value = JSON.stringify(item.build_steps || [], null, 2);
     form.elements.build_args.value = JSON.stringify(item.build_args || {}, null, 2);
     document.getElementById('build-run-summary').textContent = item.name + ' · ' + item.git_url + ' · 默认分支 ' + item.git_ref;
     document.getElementById('build-run-modal').showModal();
@@ -1388,15 +1391,20 @@
     var f = new FormData(e.target);
     var payload;
     try {
-      payload = { name: f.get('name'), description: f.get('description'), enabled: f.get('enabled') === 'on', git_url: f.get('git_url'), git_ref: f.get('git_ref'), context_dir: f.get('context_dir'), dockerfile: f.get('dockerfile'), destination: f.get('destination'), namespace: f.get('namespace'), git_username: f.get('git_username'), git_password: f.get('git_password'), registry_username: f.get('registry_username'), registry_password: f.get('registry_password'), clear_git_credentials: f.get('clear_git_credentials') === 'on', clear_registry_credentials: f.get('clear_registry_credentials') === 'on', build_args: JSON.parse(f.get('build_args') || '{}'), timeout_seconds: Number(f.get('timeout_seconds')), allow_concurrent: f.get('allow_concurrent') === 'on', retention_count: Number(f.get('retention_count')) };
-    } catch (err) { toast('构建参数必须是合法 JSON', true); return; }
+      payload = { name: f.get('name'), description: f.get('description'), enabled: f.get('enabled') === 'on', git_url: f.get('git_url'), git_ref: f.get('git_ref'), context_dir: f.get('context_dir'), dockerfile: f.get('dockerfile'), destination: f.get('destination'), namespace: f.get('namespace'), git_username: f.get('git_username'), git_password: f.get('git_password'), registry_username: f.get('registry_username'), registry_password: f.get('registry_password'), clear_git_credentials: f.get('clear_git_credentials') === 'on', clear_registry_credentials: f.get('clear_registry_credentials') === 'on', build_steps: JSON.parse(f.get('build_steps') || '[]'), build_args: JSON.parse(f.get('build_args') || '{}'), timeout_seconds: Number(f.get('timeout_seconds')), allow_concurrent: f.get('allow_concurrent') === 'on', retention_count: Number(f.get('retention_count')) };
+      if (!Array.isArray(payload.build_steps)) throw new Error('steps');
+    } catch (err) { toast('编译步骤和构建参数必须是合法 JSON，编译步骤必须为数组', true); return; }
     try { await api('/api/build-configs' + (editingBuildConfigId ? '/' + editingBuildConfigId : ''), { method: editingBuildConfigId ? 'PUT' : 'POST', body: JSON.stringify(payload) }); e.target.closest('dialog').close(); toast(editingBuildConfigId ? '构建配置已更新' : '构建配置已保存'); loadBuilds(); } catch (err) { toast(err.message, true); }
   });
   document.getElementById('build-run-form').addEventListener('submit', async function (e) {
     e.preventDefault();
-    var f = new FormData(e.target); var args;
-    try { args = JSON.parse(f.get('build_args') || '{}'); } catch (err) { toast('构建参数必须是合法 JSON', true); return; }
-    try { await api('/api/build-configs/' + f.get('config_id') + '/run', { method: 'POST', body: JSON.stringify({ git_ref: f.get('git_ref') || null, destination: f.get('destination') || null, build_args: args }) }); e.target.closest('dialog').close(); toast('构建任务已创建'); loadBuilds(); } catch (err) { toast(err.message, true); }
+    var f = new FormData(e.target); var args; var steps;
+    try {
+      args = JSON.parse(f.get('build_args') || '{}');
+      steps = JSON.parse(f.get('build_steps') || '[]');
+      if (!Array.isArray(steps)) throw new Error('steps');
+    } catch (err) { toast('编译步骤和构建参数必须是合法 JSON，编译步骤必须为数组', true); return; }
+    try { await api('/api/build-configs/' + f.get('config_id') + '/run', { method: 'POST', body: JSON.stringify({ git_ref: f.get('git_ref') || null, destination: f.get('destination') || null, build_args: args, build_steps: steps }) }); e.target.closest('dialog').close(); toast('构建任务已创建'); loadBuilds(); } catch (err) { toast(err.message, true); }
   });
   document
     .getElementById('build-form')

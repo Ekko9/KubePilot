@@ -230,7 +230,13 @@ class KubernetesService:
             self.core.create_namespaced_config_map(settings.build_namespace, body)
         return paths
 
-    def set_build_secret(self, namespace: str, name: str, values: dict[str, str]) -> str:
+    def set_build_secret(
+        self,
+        namespace: str,
+        name: str,
+        values: dict[str, str],
+        secret_type: str = "Opaque",
+    ) -> str:
         self.load()
         secret = client.V1Secret(
             metadata=client.V1ObjectMeta(
@@ -238,7 +244,7 @@ class KubernetesService:
                 namespace=namespace,
                 labels={"app.kubernetes.io/managed-by": "kubepilot", "kubepilot.io/build-credential": "true"},
             ),
-            type="Opaque",
+            type=secret_type,
             data={key: base64.b64encode(value.encode("utf-8")).decode("ascii") for key, value in values.items()},
         )
         try:
@@ -246,8 +252,14 @@ class KubernetesService:
             labels = current.metadata.labels or {}
             if labels.get("kubepilot.io/build-credential") != "true":
                 raise ValueError(f"Secret {namespace}/{name} 已存在且不归平台管理")
-            secret.metadata.resource_version = current.metadata.resource_version
-            self.core.replace_namespaced_secret(name, namespace, secret)
+            if (current.type or "Opaque") != secret_type:
+                # Secret.type is immutable. Recreate platform-managed legacy
+                # credentials when upgrading them to dockerconfigjson.
+                self.core.delete_namespaced_secret(name, namespace)
+                self.core.create_namespaced_secret(namespace, secret)
+            else:
+                secret.metadata.resource_version = current.metadata.resource_version
+                self.core.replace_namespaced_secret(name, namespace, secret)
         except ApiException as exc:
             if exc.status != 404:
                 raise
@@ -295,7 +307,15 @@ class KubernetesService:
         if registry_username and registry_password:
             auth = base64.b64encode(f"{registry_username}:{registry_password}".encode("utf-8")).decode("ascii")
             config_json = json.dumps({"auths": {registry_server: {"auth": auth}}}, separators=(",", ":"))
-            registry_secret = self.set_build_secret(namespace, registry_name, {"config.json": config_json})
+            registry_secret = self.set_build_secret(
+                namespace,
+                registry_name,
+                {
+                    "config.json": config_json,
+                    ".dockerconfigjson": config_json,
+                },
+                secret_type="kubernetes.io/dockerconfigjson",
+            )
         elif clear_registry:
             self.delete_build_secret(namespace, registry_name)
         return git_secret, registry_secret
@@ -716,13 +736,34 @@ class KubernetesService:
         if settings.registry_insecure:
             args.extend(["--insecure", "--skip-tls-verify"])
         args.extend(f"--build-arg={key}={value}" for key, value in request.build_args.items())
+        compile_containers = []
+        for index, step in enumerate(request.build_steps, start=1):
+            working_dir = "/workspace/src"
+            if step.working_dir != ".":
+                working_dir += "/" + step.working_dir.strip("/")
+            compile_containers.append(client.V1Container(
+                name=f"compile-{index}-{step.name}",
+                image=step.image,
+                command=["/bin/sh", "-ec", step.command],
+                working_dir=working_dir,
+                env=[client.V1EnvVar(name=key, value=value) for key, value in step.env.items()],
+                volume_mounts=[client.V1VolumeMount(name="workspace", mount_path="/workspace")],
+                resources=client.V1ResourceRequirements(
+                    requests={"cpu": "250m", "memory": "512Mi"},
+                    limits={"cpu": "4", "memory": "8Gi"},
+                ),
+            ))
         pod_spec = client.V1PodSpec(
             restart_policy="Never",
             service_account_name=settings.service_account_name,
+            image_pull_secrets=(
+                [client.V1LocalObjectReference(name=request.registry_secret_name)]
+                if request.registry_secret_name else None
+            ),
             init_containers=[client.V1Container(
                 name="git-clone", image=settings.git_clone_image,
                 command=["/bin/sh", "-c", clone_command], volume_mounts=init_mounts, env=git_env,
-            )],
+            ), *compile_containers],
             containers=[client.V1Container(
                 name="kaniko", image=settings.kaniko_image, args=args, volume_mounts=kaniko_mounts,
                 resources=client.V1ResourceRequirements(
@@ -761,15 +802,23 @@ class KubernetesService:
         pods = self.core.list_namespaced_pod(namespace, label_selector=f"job-name={job_name}").items
         logs = ""
         if pods:
-            try:
-                logs = self.core.read_namespaced_pod_log(pods[0].metadata.name, namespace, container="kaniko", tail_lines=200)
-            except ApiException:
-                logs = ""
-            if not logs:
+            container_names = ["git-clone"]
+            container_names.extend(
+                container.name for container in (pods[0].spec.init_containers or [])
+                if container.name != "git-clone"
+            )
+            container_names.append("kaniko")
+            sections = []
+            for container_name in container_names:
                 try:
-                    logs = self.core.read_namespaced_pod_log(pods[0].metadata.name, namespace, container="git-clone", tail_lines=200)
+                    content = self.core.read_namespaced_pod_log(
+                        pods[0].metadata.name, namespace, container=container_name, tail_lines=200,
+                    )
                 except ApiException:
-                    logs = ""
+                    content = ""
+                if content:
+                    sections.append(f"===== {container_name} =====\n{content}")
+            logs = "\n\n".join(sections)
         return {"status": status, "logs": logs}
 
     def delete_build_job(self, namespace: str, job_name: str) -> None:

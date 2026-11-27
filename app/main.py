@@ -638,6 +638,7 @@ def _start_build(payload: BuildRequest, request: Request, user: User, db: Sessio
         name=payload.name, git_url=payload.git_url, git_ref=payload.git_ref,
         context_dir=payload.context_dir, dockerfile=payload.dockerfile,
         destination=payload.destination, namespace=payload.namespace, build_args=payload.build_args,
+        build_steps=[step.model_dump() for step in payload.build_steps],
         config_id=config_id, created_by=actor_name(user),
     )
     db.add(build)
@@ -730,7 +731,7 @@ def build_detail(build_id: int, _: User = Depends(build_history_access), db: Ses
 def _build_config_payload(item: BuildConfiguration) -> dict:
     payload = {key: getattr(item, key) for key in (
         "id", "name", "description", "enabled", "git_url", "git_ref", "context_dir", "dockerfile",
-        "destination", "namespace", "build_args", "timeout_seconds",
+        "destination", "namespace", "build_args", "build_steps", "timeout_seconds",
         "allow_concurrent", "retention_count", "created_by", "created_at", "updated_at",
     )}
     payload["has_git_credentials"] = bool(item.git_auth_secret_name or item.git_secret_name)
@@ -877,6 +878,7 @@ def run_build_config(config_id: int, payload: BuildRunRequest, request: Request,
         git_auth_secret_name=item.git_auth_secret_name,
         registry_secret_name=item.registry_secret_name,
         build_args=payload.build_args if payload.build_args is not None else (item.build_args or {}),
+        build_steps=payload.build_steps if payload.build_steps is not None else (item.build_steps or []),
         timeout_seconds=item.timeout_seconds,
     )
     build = _start_build(build_payload, request, user, db, config_id=config_id)

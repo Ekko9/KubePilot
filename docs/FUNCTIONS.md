@@ -78,14 +78,37 @@ Pod、Deployment、StatefulSet、DaemonSet、Service、Ingress、ConfigMap、Sec
 
 ### 构建配置
 
-可保存名称、说明、启用状态、Git URL/ref、构建目录、Dockerfile、目标镜像、构建参数、超时、并发策略、历史保留数和认证信息。
+可保存名称、说明、启用状态、Git URL/ref、顺序编译步骤、构建目录、Dockerfile、目标镜像、构建参数、超时、并发策略、历史保留数和认证信息。
 
 - HTTP/HTTPS Git 支持账号密码；SSH Git 支持 SSH Secret。
 - 界面填写的 Git/Harbor 凭据经平台加密后保存，运行时生成或更新平台管理 Secret。
-- Harbor 推送凭据与平台自身镜像拉取所用 `imagePullSecrets` 不同。
+- 构建配置中的 Harbor 凭据同时供 Kaniko 推送镜像和构建 Pod 拉取同一 Registry 下的私有编译镜像使用；平台自身 Deployment 的 `imagePullSecrets` 仍单独配置。
 - `Git ref` 可为分支、Tag 或可检出的提交引用。
 - `ARG` 是构建参数，不是容器运行时环境变量。
 - 目标镜像须含 Registry、项目、镜像名和 Tag。
+- 编译步骤在 Git 拉取后、Kaniko 构建前按数组顺序运行；每步可配置独立镜像、仓库内工作目录、Shell 命令和环境变量。
+- 前端和后端编译容器共享 `/workspace` 临时卷，前端 `dist`、后端 JAR 等产物会保留给后续 Kaniko 使用。
+
+前后端项目示例：
+
+```json
+[
+  {
+    "name": "frontend",
+    "image": "registry.example.com/build/node:20-alpine",
+    "working_dir": "frontend",
+    "command": "npm ci && npm run build",
+    "env": {"NPM_CONFIG_REGISTRY": "http://npm.example.internal/repository/npm-group/"}
+  },
+  {
+    "name": "backend",
+    "image": "registry.example.com/build/gradle:8-jdk17",
+    "working_dir": ".",
+    "command": "chmod +x gradlew && ./gradlew :backend:clean :backend:bootJar --no-daemon",
+    "env": {}
+  }
+]
+```
 
 路径示例：仓库中 Dockerfile 为 `repo/devops/Dockerfile`。
 
@@ -97,13 +120,14 @@ Pod、Deployment、StatefulSet、DaemonSet、Service、Ingress、ConfigMap、Sec
 
 1. 验证配置启用状态、并发限制和请求参数。
 2. 在构建 namespace 创建独立 Kubernetes Job。
-3. init container 克隆 Git 到 Job 临时卷。
-4. Kaniko 读取上下文和 Dockerfile，执行分层构建。
-5. 使用 Registry 凭据推送镜像并尽可能利用远端缓存。
-6. 平台持续读取 Job/Pod 状态和日志，更新执行历史。
-7. 达到保留上限或手工删除历史时，同步清理关联 Job/Pod。
+3. `git-clone` init container 克隆 Git 到 Job 临时卷。
+4. 配置的编译 init containers 按顺序生成前端、后端等构建产物。
+5. Kaniko 读取上下文和 Dockerfile，执行分层构建。
+6. 使用 Registry 凭据推送镜像并尽可能利用远端缓存。
+7. 平台按 Git、各编译步骤、Kaniko 的顺序聚合日志并更新执行历史。
+8. 达到保留上限或手工删除历史时，同步清理关联 Job/Pod。
 
-每次构建都会创建新 Pod，本地文件不跨构建保留。合理分层并启用 Kaniko 缓存可避免每次完整下载依赖。
+每次构建都会创建新 Pod，本地文件不跨构建保留。编译镜像和 npm/Gradle/Maven 依赖源必须能从集群内访问；无公网环境应使用内网镜像仓库和依赖代理。私有编译镜像建议与目标镜像放在同一 Registry，以复用构建配置中的 Harbor 凭据。合理分层并启用 Kaniko 缓存可避免每次完整下载镜像层。
 
 ### 日志和历史
 
